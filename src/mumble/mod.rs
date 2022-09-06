@@ -1,3 +1,3 @@
 // @generated
 
-pub mod Mumble;
+pub mod mumble;
