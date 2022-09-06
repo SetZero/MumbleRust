@@ -13,7 +13,7 @@ use crate::mumble::mumble::Version;
 
 struct MessageInfo {
     pub message_type: u16,
-    pub length: usize
+    pub length: usize,
 }
 
 #[allow(dead_code)]
@@ -44,7 +44,7 @@ enum NetworkMessage {
     UserStats = 22,
     RequestBlob = 23,
     ServerConfig = 24,
-    SuggestConfig = 25
+    SuggestConfig = 25,
 }
 
 fn serialize_message(message: NetworkMessage, buffer: &[u8]) -> Vec<u8> {
@@ -61,8 +61,8 @@ fn serialize_message(message: NetworkMessage, buffer: &[u8]) -> Vec<u8> {
 fn deserialize_message(buffer: &[u8]) -> Result<MessageInfo, &'static str> {
     if buffer.len() >= 6 {
         let message = BigEndian::read_u16(&buffer);
-        let length = BigEndian::read_u32(&buffer[2..])  as usize;
-        Ok(MessageInfo{message_type: message, length})
+        let length = BigEndian::read_u32(&buffer[2..]) as usize;
+        Ok(MessageInfo { message_type: message, length })
     } else {
         Err("Invalid message format")
     }
@@ -80,7 +80,7 @@ fn write_version() -> Result<impl AsRef<[u8]>, ()> {
     match &version.write_to_bytes() {
         Ok(data) => {
             Ok(serialize_message(NetworkMessage::Version, data))
-        },
+        }
         Err(_) => Err(())
     }
 }
@@ -92,13 +92,13 @@ fn write_auth(username: String) -> Result<impl AsRef<[u8]>, ()> {
         password: None,
         tokens: vec![],
         username: Some(username),
-        special_fields: Default::default()
+        special_fields: Default::default(),
     };
 
     match &auth.write_to_bytes() {
         Ok(data) => {
             Ok(serialize_message(NetworkMessage::Authenticate, data))
-        },
+        }
         Err(_) => Err(())
     }
 }
@@ -118,7 +118,8 @@ async fn connect(
     socket.write(write_auth(user_name).unwrap().as_ref()).await?;
 
 
-
+    //TODO: Add correct buffer handling (currently we don't have any option to handle overflowing
+    // buffer data)
     let mut buffer = [0; 4096];
     loop {
         let n = socket.read(&mut buffer[..]).await.unwrap();
@@ -132,7 +133,7 @@ fn process_message(data: &[u8]) {
         let message = message_info.unwrap();
         match num::FromPrimitive::from_u16(message.message_type) {
             Some(NetworkMessage::Version) => {
-                match Version::parse_from_bytes(&data[6..6+message.length]) {
+                match Version::parse_from_bytes(&data[6..6 + message.length]) {
                     Ok(info) => println!("Data: {:?}", info),
                     Err(e) => println!("Error while parsing: {:?}", e)
                 }
