@@ -1,51 +1,17 @@
 mod mumble;
+mod utils;
+mod mumble_parser;
 
 use std::error::Error;
 use std::net::{SocketAddr, ToSocketAddrs};
-use num_derive::FromPrimitive;
 use protobuf::Message;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncWriteExt};
 use tokio::join;
 use tokio::net::TcpStream;
 use byteorder::{BigEndian, ByteOrder};
 use tokio_native_tls::native_tls::TlsConnector;
-use crate::mumble::mumble::Version;
-
-struct MessageInfo {
-    pub message_type: u16,
-    pub length: usize,
-}
-
-#[allow(dead_code)]
-#[derive(FromPrimitive)]
-enum NetworkMessage {
-    Version = 0,
-    UDPTunnel = 1,
-    Authenticate = 2,
-    Ping = 3,
-    Reject = 4,
-    ServerSync = 5,
-    ChannelRemove = 6,
-    ChannelState = 7,
-    UserRemove = 8,
-    UserState = 9,
-    BanList = 10,
-    TextMessage = 11,
-    PermissionDenied = 12,
-    ACL = 13,
-    QueryUsers = 14,
-    CryptSetup = 15,
-    ContextActionModify = 16,
-    ContextAction = 17,
-    UserList = 18,
-    VoiceTarget = 19,
-    PermissionQuery = 20,
-    CodecVersion = 21,
-    UserStats = 22,
-    RequestBlob = 23,
-    ServerConfig = 24,
-    SuggestConfig = 25,
-}
+use mumble_parser::MumbleParser;
+use crate::utils::NetworkMessage;
 
 fn serialize_message(message: NetworkMessage, buffer: &[u8]) -> Vec<u8> {
     let length: u32 = buffer.len() as u32;
@@ -56,16 +22,6 @@ fn serialize_message(message: NetworkMessage, buffer: &[u8]) -> Vec<u8> {
     new_buffer[6..].copy_from_slice(buffer);
 
     new_buffer
-}
-
-fn deserialize_message(buffer: &[u8]) -> Result<MessageInfo, &'static str> {
-    if buffer.len() >= 6 {
-        let message = BigEndian::read_u16(&buffer);
-        let length = BigEndian::read_u32(&buffer[2..]) as usize;
-        Ok(MessageInfo { message_type: message, length })
-    } else {
-        Err("Invalid message format")
-    }
 }
 
 fn write_version() -> Result<impl AsRef<[u8]>, ()> {
@@ -117,30 +73,9 @@ async fn connect(
     socket.write(write_version().unwrap().as_ref()).await?;
     socket.write(write_auth(user_name).unwrap().as_ref()).await?;
 
-
-    //TODO: Add correct buffer handling (currently we don't have any option to handle overflowing
-    // buffer data)
-    let mut buffer = [0; 4096];
-    loop {
-        let n = socket.read(&mut buffer[..]).await.unwrap();
-        process_message(&buffer[..n]);
-    }
-}
-
-fn process_message(data: &[u8]) {
-    let message_info = deserialize_message(data);
-    if message_info.is_ok() {
-        let message = message_info.unwrap();
-        match num::FromPrimitive::from_u16(message.message_type) {
-            Some(NetworkMessage::Version) => {
-                match Version::parse_from_bytes(&data[6..6 + message.length]) {
-                    Ok(info) => println!("Data: {:?}", info),
-                    Err(e) => println!("Error while parsing: {:?}", e)
-                }
-            }
-            _ => println!("Todo")
-        }
-    }
+    let mut parser = MumbleParser::new(socket);
+    parser.process().await?;
+    Ok(())
 }
 
 #[tokio::main]
