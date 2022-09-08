@@ -26,8 +26,8 @@ fn serialize_message(message: NetworkMessage, buffer: &[u8]) -> Vec<u8> {
 
 fn write_version() -> Result<impl AsRef<[u8]>, ()> {
     let version = mumble::mumble::Version {
-        version: Some((1 << 16) | (3 << 8)),
-        release: Some(String::from("1.3.0")),
+        version: Some((1 << 16) | (6 << 8)),
+        release: Some(String::from("Mumble Rust without scroll bug")),
         os: Some(String::from("Rust")),
         os_version: Some(String::from("11")),
         special_fields: Default::default(),
