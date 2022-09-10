@@ -24,7 +24,7 @@ mod tests {
     # [test]
     fn it_works() {
         let buffer = Mock::new();
-        MumbleParser::new(buffer);
+        MumbleParser::new(buffer, );
         assert_eq!(1+1, 2);
     }
 }

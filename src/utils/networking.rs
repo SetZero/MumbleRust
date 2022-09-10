@@ -2,7 +2,7 @@ use num_derive::FromPrimitive;
 
 #[allow(dead_code)]
 #[derive(FromPrimitive)]
-pub(crate) enum NetworkMessage {
+pub enum NetworkMessage {
     Version = 0,
     UDPTunnel = 1,
     Authenticate = 2,

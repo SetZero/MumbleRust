@@ -1,63 +1,18 @@
+extern crate core;
+
 mod mumble;
-mod utils;
 mod mumble_parser;
+mod utils;
+use utils::networking::NetworkMessage;
 
 use std::error::Error;
 use std::net::{SocketAddr, ToSocketAddrs};
-use protobuf::Message;
-use tokio::io::{AsyncWriteExt};
+use argparse::{ArgumentParser, Store};
 use tokio::join;
 use tokio::net::TcpStream;
-use byteorder::{BigEndian, ByteOrder};
+use cpal::traits::{DeviceTrait, HostTrait};
 use tokio_native_tls::native_tls::TlsConnector;
 use mumble_parser::MumbleParser;
-use crate::utils::NetworkMessage;
-
-fn serialize_message(message: NetworkMessage, buffer: &[u8]) -> Vec<u8> {
-    let length: u32 = buffer.len() as u32;
-    let encoded_msg = message as u16;
-    let mut new_buffer = vec![0; (length + 6) as usize];
-    BigEndian::write_u16(&mut new_buffer, encoded_msg);
-    BigEndian::write_u32(&mut new_buffer[2..], length);
-    new_buffer[6..].copy_from_slice(buffer);
-
-    new_buffer
-}
-
-fn write_version() -> Result<impl AsRef<[u8]>, ()> {
-    let version = mumble::mumble::Version {
-        version: Some((1 << 16) | (6 << 8)),
-        release: Some(String::from("Mumble Rust without scroll bug")),
-        os: Some(String::from("Rust")),
-        os_version: Some(String::from("11")),
-        special_fields: Default::default(),
-    };
-
-    match &version.write_to_bytes() {
-        Ok(data) => {
-            Ok(serialize_message(NetworkMessage::Version, data))
-        }
-        Err(_) => Err(())
-    }
-}
-
-fn write_auth(username: String) -> Result<impl AsRef<[u8]>, ()> {
-    let auth = mumble::mumble::Authenticate {
-        opus: Some(true),
-        celt_versions: vec![-2147483637, -2147483632],
-        password: None,
-        tokens: vec![],
-        username: Some(username),
-        special_fields: Default::default(),
-    };
-
-    match &auth.write_to_bytes() {
-        Ok(data) => {
-            Ok(serialize_message(NetworkMessage::Authenticate, data))
-        }
-        Err(_) => Err(())
-    }
-}
 
 async fn connect(
     server_host: String,
@@ -68,23 +23,17 @@ async fn connect(
     let cx = TlsConnector::builder().danger_accept_invalid_certs(true).build()?;
     let cx = tokio_native_tls::TlsConnector::from(cx);
 
-    let mut socket = cx.connect(&server_host, socket).await?;
-
-    socket.write(write_version().unwrap().as_ref()).await?;
-    socket.write(write_auth(user_name).unwrap().as_ref()).await?;
-
-    let mut parser = MumbleParser::new(socket);
-    parser.process().await?;
+    let socket = cx.connect(&server_host, socket).await?;
+    let mut parser = MumbleParser::new(socket, user_name);
+    parser.start().await?;
     Ok(())
 }
 
 #[tokio::main]
 async fn main() {
+    handle_audio();
     // Handle command line arguments
-    let server_host = "89.58.32.239".to_string();
-    let server_port = 64738u16;
-    let user_name = "Endor".to_string();
-    let server_addr = (server_host.as_ref(), server_port).to_socket_addrs().expect("Failed to parse server address").next().expect("Failed to resolve server address");
+    let (server_host, user_name, server_addr) = process_args();
 
     // Run it
     let result = join!(
@@ -98,5 +47,43 @@ async fn main() {
     match result {
         (Ok(_), ) => println!("Successfully got data!"),
         (Err(err), ) => println!("Something went wrong: {}", err)
+    }
+}
+
+fn process_args() -> (String, String, SocketAddr) {
+    let mut server_host = "89.58.32.239".to_string();
+    let mut server_port = 64738u16;
+    let mut user_name = "Endor".to_string();
+    let server_addr = (server_host.as_ref(), server_port).to_socket_addrs().expect("Failed to parse server address").next().expect("Failed to resolve server address");
+
+    {
+        let mut ap = ArgumentParser::new();
+        ap.set_description("Connect to a mumble server.");
+        ap.refer(&mut server_host)
+            .add_option(&["--host"], Store,
+                        "hostname");
+        ap.refer(&mut server_port)
+            .add_option(&["-p", "--port"], Store,
+                        "server port");
+        ap.refer(&mut user_name)
+            .add_option(&["-u", "--user"], Store,
+                        "username");
+        ap.parse_args_or_exit();
+    }
+
+    (server_host, user_name, server_addr)
+}
+
+fn handle_audio() {
+    let available_hosts = cpal::available_hosts();
+    println!("Available hosts:\n  {:?}", available_hosts);
+    for host_id in available_hosts {
+        println!("{}", host_id.name());
+        let host = cpal::host_from_id(host_id).unwrap();
+
+        let default_in = host.default_input_device().map(|e| e.name().unwrap());
+        let default_out = host.default_output_device().map(|e| e.name().unwrap());
+        println!("  Default Input Device:\n    {:?}", default_in);
+        println!("  Default Output Device:\n    {:?}", default_out);
     }
 }
