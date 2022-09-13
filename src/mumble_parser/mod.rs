@@ -1,14 +1,23 @@
-mod tests;
-
-use std::cmp;
+pub mod network;
+/*use std::cmp;
 use std::error::Error;
+use std::net::{ToSocketAddrs};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
 use byteorder::{BigEndian, ByteOrder};
 use protobuf::Message;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+use tokio_native_tls::native_tls::TlsConnector;
+use tokio_native_tls::TlsStream;
+
 use crate::mumble::mumble::{ChannelState, CodecVersion, CryptSetup, PermissionQuery, ServerConfig, ServerSync, TextMessage, UserState, Version};
-use crate::{NetworkMessage};
 use crate::mumble::mumble;
+use crate::NetworkMessage;
+
+mod tests;
 
 const METADATA_SIZE: usize = 6;
 const BUFFER_SIZE: usize = 4096;
@@ -19,10 +28,10 @@ struct MessageInfo {
     pub length: usize,
 }
 
-pub struct MumbleParser<R>
-    where R: AsyncRead + AsyncWrite + Unpin {
-    input: R,
-    pub user_name: String,
+#[derive(Default)]
+pub struct MumbleParser {
+    reader: Arc<Mutex<Option<ReadHalf<TlsStream<TcpStream>>>>>,
+    writer: Arc<Mutex<Option<WriteHalf<TlsStream<TcpStream>>>>>,
 }
 
 fn serialize_message(message: NetworkMessage, buffer: &[u8]) -> Vec<u8> {
@@ -101,20 +110,42 @@ fn write_ping() -> Result<impl AsRef<[u8]>, ()> {
     }
 }
 
-impl<R> MumbleParser<R>
-    where R: AsyncRead + AsyncWrite + Unpin {
-    pub(crate) fn new(input: R, user_name: String) -> MumbleParser<R> {
-        MumbleParser { input, user_name }
+impl MumbleParser {
+    pub(crate) fn new() -> Self {
+        Self::default()
     }
 
-    pub(crate) async fn start(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.input.write(write_version().unwrap().as_ref()).await?;
-        self.input.write(write_auth(self.user_name.clone()).unwrap().as_ref()).await?;
+    pub(crate) async fn connect(&mut self, server_host: String, server_port: u16, user_name: String) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let server_addr = (server_host.as_ref(), server_port).to_socket_addrs().expect("Failed to parse server address").next().expect("Failed to resolve server address");
+        let socket = TcpStream::connect(&server_addr).await?;
+        let cx = TlsConnector::builder().danger_accept_invalid_certs(true).build()?;
+        let cx = tokio_native_tls::TlsConnector::from(cx);
+
+        let socket = cx.connect(&server_host, socket).await?;
+        let (reader, writer) = tokio::io::split(socket);
+        self.reader = Arc::new(Mutex::new(Some(reader)));
+        self.writer = Arc::new(Mutex::new(Some(writer)));
+
+        {
+            let mut wlock = self.writer.lock().await;
+
+            let write_lock = wlock.as_mut().unwrap();
+
+            write_lock.write(write_version().unwrap().as_ref()).await?;
+            write_lock.write(write_auth(user_name.clone()).unwrap().as_ref()).await?;
+        }
+        self.read_queue().await
+    }
+
+    async fn read_queue(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let mut rlock = self.reader.lock().await;
+        let read_lock = rlock.as_mut().unwrap();
 
         let mut tmp_buffer = [0; BUFFER_SIZE];
 
         let mut buffer_size = 0;
         let mut buffer_last_read = 0;
+
         loop {
             let mut n = 0;
             let mut metadata_message_buf = Vec::<u8>::new();
@@ -122,10 +153,10 @@ impl<R> MumbleParser<R>
                 let old_buffer_last_read;
                 if buffer_size <= buffer_last_read {
                     buffer_last_read = 0;
-                    buffer_size = 0;
+                    //buffer_size = 0;
                     tmp_buffer = [0; BUFFER_SIZE];
 
-                    n += self.input.read(&mut tmp_buffer[..]).await?;
+                    n += read_lock.read(&mut tmp_buffer[..]).await?;
                     old_buffer_last_read = buffer_last_read;
                     buffer_last_read += cmp::min(METADATA_SIZE - metadata_message_buf.len(), n);
                     buffer_size = n - metadata_message_buf.len();
@@ -147,17 +178,17 @@ impl<R> MumbleParser<R>
             while payload_buffer.len() < metadata.length {
                 if buffer_size <= buffer_last_read {
                     let input_buffer_remaining_bytes = cmp::min(METADATA_SIZE, metadata.length - payload_buffer.len());
-                    n = self.input.read(&mut tmp_buffer[..input_buffer_remaining_bytes]).await?;
+                    n = read_lock.read(&mut tmp_buffer[..input_buffer_remaining_bytes]).await?;
                     payload_buffer.extend_from_slice(&tmp_buffer[..n]);
                 } else {
-                    let mut tmp_last_read = cmp::min(metadata.length, buffer_size - buffer_last_read);
+                    let tmp_last_read = cmp::min(metadata.length, buffer_size - buffer_last_read);
                     payload_buffer.extend_from_slice(&tmp_buffer[buffer_last_read..tmp_last_read]);
                     buffer_last_read += tmp_last_read;
                 }
             }
             self.process_message(metadata.message_type, payload_buffer);
             //TODO: Move to timer thread
-            self.input.write(write_ping().unwrap().as_ref()).await?;
+            //write_lock.write(write_ping().unwrap().as_ref()).await?;
         }
     }
 
@@ -173,68 +204,68 @@ impl<R> MumbleParser<R>
 
     // TODO: Remove this giant match and use some different pattern
     fn process_message(&self, message_type: u16, data: Vec<u8>) {
-            match num::FromPrimitive::from_u16(message_type) {
-                Some(NetworkMessage::Version) => {
-                    match Version::parse_from_bytes(&*data) {
-                        Ok(info) => println!("Data: {:?}", info),
-                        Err(e) => println!("Error while parsing: {:?}", e)
-                    }
+        match num::FromPrimitive::from_u16(message_type) {
+            Some(NetworkMessage::Version) => {
+                match Version::parse_from_bytes(&*data) {
+                    Ok(info) => println!("Data: {:?}", info),
+                    Err(e) => println!("Error while parsing: {:?}", e)
                 }
-                Some(NetworkMessage::CryptSetup) => {
-                    match CryptSetup::parse_from_bytes(&*data) {
-                        Ok(info) => println!("Data: {:?}", info),
-                        Err(e) => println!("Error while parsing CryptSetup: {:?}", e)
-                    }
-                }
-                Some(NetworkMessage::CodecVersion) => {
-                    match CodecVersion::parse_from_bytes(&*data) {
-                        Ok(info) => println!("Data: {:?}", info),
-                        Err(e) => println!("Error while parsing CodecVersion: {:?}", e)
-                    }
-                }
-                Some(NetworkMessage::ChannelState) => {
-                    match ChannelState::parse_from_bytes(&*data) {
-                        Ok(info) => println!("Data: {:?}", info),
-                        Err(e) => println!("Error while parsing ChannelState: {:?}", e)
-                    }
-                }
-                Some(NetworkMessage::PermissionQuery) => {
-                    match PermissionQuery::parse_from_bytes(&*data) {
-                        Ok(info) => println!("Data: {:?}", info),
-                        Err(e) => println!("Error while parsing PermissionQuery: {:?}", e)
-                    }
-                }
-                Some(NetworkMessage::UserState) => {
-                    match UserState::parse_from_bytes(&*data) {
-                        Ok(info) => println!("Data: {:?}", info),
-                        Err(e) => println!("Error while parsing UserState: {:?}", e)
-                    }
-                }
-                Some(NetworkMessage::ServerSync) => {
-                    match ServerSync::parse_from_bytes(&*data) {
-                        Ok(info) => println!("Data: {:?}", info),
-                        Err(e) => println!("Error while parsing ServerSync: {:?}", e)
-                    }
-                }
-                Some(NetworkMessage::ServerConfig) => {
-                    match ServerConfig::parse_from_bytes(&*data) {
-                        Ok(info) => println!("Data: {:?}", info),
-                        Err(e) => println!("Error while parsing ServerConfig: {:?}", e)
-                    }
-                }
-                Some(NetworkMessage::TextMessage) => {
-                    match TextMessage::parse_from_bytes(&*data) {
-                        Ok(info) => println!("Data: {:?}", info),
-                        Err(e) => println!("Error while parsing TextMessage: {:?}", e)
-                    }
-                }
-                Some(NetworkMessage::UserRemove) => {
-                    match TextMessage::parse_from_bytes(&*data) {
-                        Ok(info) => println!("Data: {:?}", info),
-                        Err(e) => println!("Error while parsing UserRemove: {:?}", e)
-                    }
-                }
-                _ => println!("Todo: {}", message_type)
             }
+            Some(NetworkMessage::CryptSetup) => {
+                match CryptSetup::parse_from_bytes(&*data) {
+                    Ok(info) => println!("Data: {:?}", info),
+                    Err(e) => println!("Error while parsing CryptSetup: {:?}", e)
+                }
+            }
+            Some(NetworkMessage::CodecVersion) => {
+                match CodecVersion::parse_from_bytes(&*data) {
+                    Ok(info) => println!("Data: {:?}", info),
+                    Err(e) => println!("Error while parsing CodecVersion: {:?}", e)
+                }
+            }
+            Some(NetworkMessage::ChannelState) => {
+                match ChannelState::parse_from_bytes(&*data) {
+                    Ok(info) => println!("Data: {:?}", info),
+                    Err(e) => println!("Error while parsing ChannelState: {:?}", e)
+                }
+            }
+            Some(NetworkMessage::PermissionQuery) => {
+                match PermissionQuery::parse_from_bytes(&*data) {
+                    Ok(info) => println!("Data: {:?}", info),
+                    Err(e) => println!("Error while parsing PermissionQuery: {:?}", e)
+                }
+            }
+            Some(NetworkMessage::UserState) => {
+                match UserState::parse_from_bytes(&*data) {
+                    Ok(info) => println!("Data: {:?}", info),
+                    Err(e) => println!("Error while parsing UserState: {:?}", e)
+                }
+            }
+            Some(NetworkMessage::ServerSync) => {
+                match ServerSync::parse_from_bytes(&*data) {
+                    Ok(info) => println!("Data: {:?}", info),
+                    Err(e) => println!("Error while parsing ServerSync: {:?}", e)
+                }
+            }
+            Some(NetworkMessage::ServerConfig) => {
+                match ServerConfig::parse_from_bytes(&*data) {
+                    Ok(info) => println!("Data: {:?}", info),
+                    Err(e) => println!("Error while parsing ServerConfig: {:?}", e)
+                }
+            }
+            Some(NetworkMessage::TextMessage) => {
+                match TextMessage::parse_from_bytes(&*data) {
+                    Ok(info) => println!("Data: {:?}", info),
+                    Err(e) => println!("Error while parsing TextMessage: {:?}", e)
+                }
+            }
+            Some(NetworkMessage::UserRemove) => {
+                match TextMessage::parse_from_bytes(&*data) {
+                    Ok(info) => println!("Data: {:?}", info),
+                    Err(e) => println!("Error while parsing UserRemove: {:?}", e)
+                }
+            }
+            _ => println!("Todo: {}", message_type)
+        }
     }
-}
+}*/
