@@ -8,6 +8,7 @@ use std::error::Error;
 use argparse::{ArgumentParser, Store};
 use tokio::join;
 use cpal::traits::{DeviceTrait, HostTrait};
+use crate::mumble_parser::MumbleParser;
 use crate::mumble_parser::network::Network;
 
 async fn connect(
@@ -19,8 +20,11 @@ async fn connect(
     //let mut parser = MumbleParser::new();
     //parser.connect(server_host, server_port, user_name).await?;
     let mut network = Network::new();
-    network.connect(server_host, server_port, user_name).await.expect("TODO: panic message");
-    Ok(())
+    network.connect(server_host, server_port).await.expect("TODO: panic message");
+
+    let mut parser = MumbleParser::new(Box::new(network));
+    parser.connect().await.expect("TODO: panic message"); // TODO: Call network connect in this function
+    loop {}
 }
 
 #[tokio::main]
@@ -39,7 +43,7 @@ async fn main() {
     );
 
     match result {
-        (Ok(_), ) => println!("Successfully got data!"),
+        (Ok(_), ) => println!("Successfully got audio data!"),
         (Err(err), ) => println!("Something went wrong: {}", err)
     }
 }

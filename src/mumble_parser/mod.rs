@@ -1,4 +1,84 @@
+use std::error::Error;
+use std::future::Future;
+use byteorder::{BigEndian, ByteOrder};
+use protobuf::Message;
+use crate::mumble::mumble;
+
+use crate::mumble_parser::network::{TCPClient, TCPReceiver, TCPSender};
+use crate::utils::networking::NetworkMessage;
+
 pub mod network;
+
+pub struct MumbleParser {
+    network: Box<dyn TCPSender>
+}
+
+impl MumbleParser {
+    pub fn new(network: Box<dyn TCPSender>) -> Self {
+        MumbleParser{network}
+    }
+
+    pub async fn connect(&mut self) -> Result<(), Box<dyn Error>> {
+        println!("Called connect()");
+        self.network.send_message(write_version().unwrap()).await;
+        self.network.send_message(write_auth("Endor".parse().unwrap()).unwrap()).await;
+        Ok(())
+    }
+}
+
+impl<T, F> TCPClient<F> for T
+    where T: TCPSender + TCPReceiver<F>,
+          F: Future + Send + 'static,
+          F::Output: Send + 'static {
+
+}
+
+fn serialize_message(message: NetworkMessage, buffer: &[u8]) -> Vec<u8> {
+    let length: u32 = buffer.len() as u32;
+    let encoded_msg = message as u16;
+    let mut new_buffer = vec![0; (length + 6) as usize];
+    BigEndian::write_u16(&mut new_buffer, encoded_msg);
+    BigEndian::write_u32(&mut new_buffer[2..], length);
+    new_buffer[6..].copy_from_slice(buffer);
+
+    new_buffer
+}
+
+fn write_version() -> Result<Vec<u8>, ()> {
+    let version = mumble::Version {
+        version: Some((1 << 16) | (6 << 8)),
+        release: Some(String::from("Mumble Rust without scroll bug")),
+        os: Some(String::from("Rust")),
+        os_version: Some(String::from("11")),
+        special_fields: Default::default(),
+    };
+
+    match &version.write_to_bytes() {
+        Ok(data) => {
+            Ok(serialize_message(NetworkMessage::Version, data))
+        }
+        Err(_) => Err(())
+    }
+}
+
+fn write_auth(username: String) -> Result<Vec<u8>, ()> {
+    let auth = mumble::Authenticate {
+        opus: Some(true),
+        celt_versions: vec![-2147483637, -2147483632],
+        password: None,
+        tokens: vec![],
+        username: Some(username),
+        special_fields: Default::default(),
+    };
+
+    match &auth.write_to_bytes() {
+        Ok(data) => {
+            Ok(serialize_message(NetworkMessage::Authenticate, data))
+        }
+        Err(_) => Err(())
+    }
+}
+
 /*use std::cmp;
 use std::error::Error;
 use std::net::{ToSocketAddrs};
