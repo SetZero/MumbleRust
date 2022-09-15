@@ -9,21 +9,16 @@ use argparse::{ArgumentParser, Store};
 use tokio::join;
 use cpal::traits::{DeviceTrait, HostTrait};
 use crate::mumble_parser::MumbleParser;
-use crate::mumble_parser::network::Network;
+use crate::mumble_parser::network::{Network, TCPClient};
 
 async fn connect(
     server_host: String,
     server_port: u16,
     user_name: String,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-
-    //let mut parser = MumbleParser::new();
-    //parser.connect(server_host, server_port, user_name).await?;
-    let mut network = Network::new();
-    network.connect(server_host, server_port).await.expect("TODO: panic message");
-
+    let network = Network::new();
     let mut parser = MumbleParser::new(Box::new(network));
-    parser.connect().await.expect("TODO: panic message"); // TODO: Call network connect in this function
+    parser.connect(server_host, server_port, user_name).await.expect("TODO: panic message"); // TODO: Call network connect in this function
     loop {}
 }
 

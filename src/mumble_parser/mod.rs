@@ -1,36 +1,36 @@
 use std::error::Error;
-use std::future::Future;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use byteorder::{BigEndian, ByteOrder};
 use protobuf::Message;
 use crate::mumble::mumble;
+use tokio::{time};
 
-use crate::mumble_parser::network::{TCPClient, TCPReceiver, TCPSender};
+use crate::TCPClient;
 use crate::utils::networking::NetworkMessage;
 
 pub mod network;
 
 pub struct MumbleParser {
-    network: Box<dyn TCPSender>
+    network: Box<dyn TCPClient>
 }
 
 impl MumbleParser {
-    pub fn new(network: Box<dyn TCPSender>) -> Self {
+    pub fn new(network: Box<dyn TCPClient>) -> Self {
         MumbleParser{network}
     }
 
-    pub async fn connect(&mut self) -> Result<(), Box<dyn Error>> {
-        println!("Called connect()");
+    pub async fn connect(&mut self, server_host: String, server_port: u16, user_name: String) -> Result<(), Box<dyn Error>> {
+        self.network.connect(server_host, server_port).await.expect("TODO: panic message");
         self.network.send_message(write_version().unwrap()).await;
-        self.network.send_message(write_auth("Endor".parse().unwrap()).unwrap()).await;
-        Ok(())
+        self.network.send_message(write_auth(user_name).unwrap()).await;
+
+
+        let mut interval = time::interval(Duration::from_secs(20));
+        loop {
+            interval.tick().await;
+            self.network.send_message(write_ping().unwrap()).await;
+        };
     }
-}
-
-impl<T, F> TCPClient<F> for T
-    where T: TCPSender + TCPReceiver<F>,
-          F: Future + Send + 'static,
-          F::Output: Send + 'static {
-
 }
 
 fn serialize_message(message: NetworkMessage, buffer: &[u8]) -> Vec<u8> {
@@ -72,6 +72,36 @@ fn write_auth(username: String) -> Result<Vec<u8>, ()> {
     };
 
     match &auth.write_to_bytes() {
+        Ok(data) => {
+            Ok(serialize_message(NetworkMessage::Authenticate, data))
+        }
+        Err(_) => Err(())
+    }
+}
+
+fn write_ping() -> Result<Vec<u8>, ()> {
+    //println!("PING!");
+    let start = SystemTime::now();
+    let since_the_epoch = start
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+
+    let ping = mumble::Ping {
+        timestamp: Option::from(since_the_epoch.as_secs()),
+        good: None,
+        late: None,
+        lost: None,
+        resync: None,
+        udp_packets: None,
+        tcp_packets: None,
+        udp_ping_avg: None,
+        udp_ping_var: None,
+        tcp_ping_avg: None,
+        tcp_ping_var: None,
+        special_fields: Default::default(),
+    };
+
+    match &ping.write_to_bytes() {
         Ok(data) => {
             Ok(serialize_message(NetworkMessage::Authenticate, data))
         }

@@ -1,12 +1,12 @@
 use std::error::Error;
-use std::future::Future;
 use std::net::ToSocketAddrs;
+
+use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Sender};
 use tokio_native_tls::native_tls::TlsConnector;
-use async_trait::async_trait;
 
 const BUFFER_SIZE: usize = 4096;
 
@@ -15,29 +15,25 @@ pub trait TCPSender {
     async fn send_message(&mut self, message: Vec<u8>);
 }
 
-pub trait TCPReceiver<T>
-    where
-        T: Future + Send + 'static,
-        T::Output: Send + 'static
+#[async_trait]
+pub trait TCPReceiver
 {
-    fn listen_message(&mut self, future: T);
+    async fn get_message(&mut self) ->  Option<Vec<u8>>;
 }
 
-pub trait TCPClient<T>: TCPSender + TCPReceiver<T>
-    where
-        T: Future + Send + 'static,
-        T::Output: Send + 'static {}
+#[async_trait]
+pub trait TCPClient: TCPSender + TCPReceiver {
+    async fn connect(&mut self, server_host: String, server_port: u16) -> Result<(), Box<dyn Error + Send + Sync>>;
+}
 
 pub struct Network {
     writer_tx: Option<Sender<Vec<u8>>>,
 }
 
-impl Network {
-    pub fn new() -> Self {
-        Network { writer_tx: None }
-    }
-
-    pub async fn connect(&mut self, server_host: String, server_port: u16) -> Result<(), Box<dyn Error + Send + Sync>> {
+#[async_trait]
+impl TCPClient for Network
+    where Network: TCPSender + TCPReceiver {
+    async fn connect(&mut self, server_host: String, server_port: u16) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(4096);
         let (reader_tx, mut reader_rx) = mpsc::channel::<Vec<u8>>(4096);
         self.writer_tx = Some(writer_tx);
@@ -86,6 +82,12 @@ impl Network {
     }
 }
 
+impl Network {
+    pub fn new() -> Self {
+        Network { writer_tx: None }
+    }
+}
+
 #[async_trait]
 impl TCPSender for Network {
     async fn send_message(&mut self, message: Vec<u8>) {
@@ -100,9 +102,10 @@ impl TCPSender for Network {
     }
 }
 
-impl<T: std::future::Future> TCPReceiver<T> for Network
-    where
-        T: Future + Send + 'static,
-        T::Output: Send + 'static {
-    fn listen_message(&mut self, future: T) {}
+#[async_trait]
+impl TCPReceiver for Network {
+     async fn get_message(&mut self) -> Option<Vec<u8>> {
+
+         None
+     }
 }
