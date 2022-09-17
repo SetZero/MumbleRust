@@ -5,6 +5,7 @@ mod mumble_parser;
 mod utils;
 
 use std::error::Error;
+use std::sync::Arc;
 use argparse::{ArgumentParser, Store};
 use tokio::join;
 use cpal::traits::{DeviceTrait, HostTrait};
@@ -16,8 +17,8 @@ async fn connect(
     server_port: u16,
     user_name: String,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut mumble = MumbleParser::new();
-    mumble.connect(server_host, server_port, user_name).await.expect("TODO: panic message");
+    let mut mumble = Arc::new(MumbleParser::new());
+    mumble.clone().connect(server_host, server_port, user_name).await.expect("TODO: panic message");
     let channels = mumble.get_channels();
     println!("Channels: {:?}", channels);
     loop {}

@@ -27,6 +27,7 @@ pub trait TCPClient: TCPSender + TCPReceiver {
     async fn connect(&mut self, server_host: String, server_port: u16) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 
+#[derive(Debug)]
 pub struct Network {
     writer_tx: Option<Sender<Vec<u8>>>,
     reader_rx: Option<Receiver<Vec<u8>>>,
