@@ -6,8 +6,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio_native_tls::native_tls::TlsConnector;
 use tokio::sync::mpsc::error::SendError;
+use tokio_native_tls::native_tls::TlsConnector;
 
 const BUFFER_SIZE: usize = 4096;
 
@@ -19,7 +19,7 @@ pub trait TCPSender {
 #[async_trait]
 pub trait TCPReceiver
 {
-    async fn get_message(&mut self) ->  Option<Vec<u8>>;
+    async fn get_message(&mut self) -> Option<Vec<u8>>;
 }
 
 #[async_trait]
@@ -60,17 +60,17 @@ impl TCPClient for Network
         tokio::spawn(async move {
             loop {
                 tokio::select! {
-                write = writer_rx.recv() => {
-                    if write.is_some() {
-                        let _result = writer.write(&write.unwrap()).await;
+                    write = writer_rx.recv() => {
+                        if write.is_some() {
+                            let _result = writer.write(&write.unwrap()).await;
+                        }
+                    }
+                    bytes = reader.read(&mut tmp_buffer[..]) => {
+                        if bytes.is_ok() {
+                            let _result = reader_tx.send(tmp_buffer[..bytes.unwrap()].to_vec()).await;
+                        }
                     }
                 }
-                bytes = reader.read(&mut tmp_buffer[..]) => {
-                    if bytes.is_ok() {
-                        let _result = reader_tx.send(tmp_buffer[..bytes.unwrap()].to_vec()).await;
-                    }
-                }
-            }
             }
         });
 
@@ -101,7 +101,7 @@ impl TCPSender for Network {
 
 #[async_trait]
 impl TCPReceiver for Network {
-     async fn get_message(&mut self) -> Option<Vec<u8>> {
-         self.reader_rx.as_mut().unwrap().recv().await
-     }
+    async fn get_message(&mut self) -> Option<Vec<u8>> {
+        self.reader_rx.as_mut()?.recv().await
+    }
 }

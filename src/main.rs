@@ -16,9 +16,10 @@ async fn connect(
     server_port: u16,
     user_name: String,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let network = Network::new();
-    let mut parser = MumbleParser::new(Box::new(network));
-    parser.connect(server_host, server_port, user_name).await.expect("TODO: panic message"); // TODO: Call network connect in this function
+    let mut mumble = MumbleParser::new();
+    mumble.connect(server_host, server_port, user_name).await.expect("TODO: panic message");
+    let channels = mumble.get_channels();
+    println!("Channels: {:?}", channels);
     loop {}
 }
 
